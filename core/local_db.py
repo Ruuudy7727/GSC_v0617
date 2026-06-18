@@ -337,7 +337,11 @@ def retrieve_hybrid(
             emb_scores_raw[did] = 1.0 - float(dist)
         emb_scores = minmax_norm(emb_scores_raw)
     except Exception as e:
-        print(f"向量检索失败: {e}")
+        err = str(e)
+        if "429" in err or "限流" in err:
+            print(f"向量检索失败（Embedding API 限流，已降级 BM25）: {e}")
+        else:
+            print(f"向量检索失败: {e}")
         emb_scores, emb_docs_map = {}, {}
 
     bm25_scores: Dict[str, float] = {}

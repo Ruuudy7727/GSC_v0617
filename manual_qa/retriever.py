@@ -3,6 +3,7 @@
 
 import os
 import re
+import time
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Tuple
@@ -106,6 +107,8 @@ _CONTEXT_MIN_CONTENT_LEN = 60
 _SHORT_CHUNK_THRESHOLD = 80
 # 过滤手册内嵌小图标（告警符号、页眉图标等），宽高均低于此值的图片不展示/不传 vision
 _MIN_IMAGE_DIMENSION = int(os.getenv("IMAGE_MIN_DIMENSION", "80"))
+_TOPIC_EXTRA_MAX = int(os.getenv("RETRIEVAL_TOPIC_EXTRA_MAX", "3"))
+_EMBED_QUERY_INTERVAL = float(os.getenv("EMBED_QUERY_INTERVAL", "0.35"))
 
 
 @dataclass
@@ -170,7 +173,7 @@ def _get_topic_queries(query: str, product_id: Optional[str] = None) -> List[str
             continue
         titles = product_buckets.get(bucket, [])
         if titles:
-            extra.extend(titles[:5])
+            extra.extend(titles[:_TOPIC_EXTRA_MAX])
         else:
             extra.extend(_TOPIC_FALLBACK.get(bucket, []))
 
@@ -349,7 +352,9 @@ def hybrid_search(
         fetch_k = max(k * 3, 12) if len(queries) > 1 else max(k * 5, 10)
 
     merged: Dict[str, RetrievedChunk] = {}
-    for search_query in queries:
+    for i, search_query in enumerate(queries):
+        if i > 0 and _EMBED_QUERY_INTERVAL > 0:
+            time.sleep(_EMBED_QUERY_INTERVAL)
         raw = retrieve_hybrid(
             query=search_query,
             top_k=fetch_k,

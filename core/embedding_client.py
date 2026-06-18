@@ -2,6 +2,7 @@
 # -*- coding: utf-8 -*-
 
 import os
+import time
 from pathlib import Path
 from typing import Dict, List, Optional, Union
 
@@ -14,6 +15,7 @@ _DEFAULT_ONLINE_MODEL = "Qwen3-Embedding-4B"
 _DEFAULT_OLLAMA_HOST = "http://127.0.0.1:11434"
 _DEFAULT_OLLAMA_MODEL = "qwen3-embedding:4b"
 _DEFAULT_TIMEOUT = 120.0
+_QUERY_EMBED_CACHE: Dict[str, List[float]] = {}
 
 
 def _load_env() -> None:
@@ -29,6 +31,40 @@ def _parse_optional_int(value: str) -> Optional[int]:
     if not text:
         return None
     return int(text)
+
+
+def _embedding_retry_settings() -> Dict[str, float]:
+    _load_env()
+    return {
+        "max_retries": int(os.getenv("EMBED_MAX_RETRIES", "8")),
+        "base_delay": float(os.getenv("EMBED_RETRY_BASE_DELAY", "2.0")),
+    }
+
+
+def _query_cache_size() -> int:
+    _load_env()
+    return max(0, int(os.getenv("EMBED_QUERY_CACHE_SIZE", "256")))
+
+
+def _is_retryable_embedding_error(exc: Exception) -> bool:
+    status = getattr(exc, "status_code", None)
+    if status == 429:
+        return True
+    msg = str(exc).lower()
+    return "429" in msg or "rate limit" in msg or "限流" in msg
+
+
+def _cache_get_query(key: str) -> Optional[List[float]]:
+    return _QUERY_EMBED_CACHE.get(key)
+
+
+def _cache_set_query(key: str, vec: List[float]) -> None:
+    max_size = _query_cache_size()
+    if max_size <= 0:
+        return
+    if len(_QUERY_EMBED_CACHE) >= max_size:
+        _QUERY_EMBED_CACHE.pop(next(iter(_QUERY_EMBED_CACHE)))
+    _QUERY_EMBED_CACHE[key] = vec
 
 
 def get_embedding_settings() -> Dict[str, object]:
@@ -83,8 +119,15 @@ class OllamaEmbeddingClient:
         return self._embed(texts)
 
     def embed_query(self, text: str) -> List[float]:
+        cache_key = f"{self.model}:{text}"
+        cached = _cache_get_query(cache_key)
+        if cached is not None:
+            return cached
         vectors = self._embed([text])
-        return vectors[0] if vectors else []
+        vec = vectors[0] if vectors else []
+        if vec:
+            _cache_set_query(cache_key, vec)
+        return vec
 
 
 class OnlineEmbeddingClient:
@@ -115,10 +158,10 @@ class OnlineEmbeddingClient:
             base_url=self.base_url,
             default_headers={"AIGC-USER": user},
             timeout=timeout,
-            max_retries=2,
+            max_retries=0,
         )
 
-    def _embed(self, texts: List[str]) -> List[List[float]]:
+    def _embed_once(self, texts: List[str]) -> List[List[float]]:
         clean_texts = [text if isinstance(text, str) else str(text) for text in texts]
         request_args = {"model": self.model, "input": clean_texts}
         if self.dimensions is not None:
@@ -127,14 +170,43 @@ class OnlineEmbeddingClient:
         data = sorted(response.data, key=lambda item: item.index)
         return [list(item.embedding) for item in data]
 
+    def _embed(self, texts: List[str]) -> List[List[float]]:
+        retry_cfg = _embedding_retry_settings()
+        max_retries = int(retry_cfg["max_retries"])
+        base_delay = float(retry_cfg["base_delay"])
+        last_error: Optional[Exception] = None
+
+        for attempt in range(1, max_retries + 1):
+            try:
+                return self._embed_once(texts)
+            except Exception as exc:
+                last_error = exc
+                if not _is_retryable_embedding_error(exc) or attempt >= max_retries:
+                    raise
+                wait_seconds = base_delay * (2 ** (attempt - 1))
+                print(
+                    f"[embedding] 限流重试 {attempt}/{max_retries}，"
+                    f"{wait_seconds:.1f}s 后重试: {exc}"
+                )
+                time.sleep(wait_seconds)
+
+        raise RuntimeError(f"嵌入失败: {last_error}")
+
     def embed_documents(self, texts: List[str]) -> List[List[float]]:
         if not texts:
             return []
         return self._embed(texts)
 
     def embed_query(self, text: str) -> List[float]:
+        cache_key = f"{self.model}:{text}"
+        cached = _cache_get_query(cache_key)
+        if cached is not None:
+            return cached
         vectors = self._embed([text])
-        return vectors[0] if vectors else []
+        vec = vectors[0] if vectors else []
+        if vec:
+            _cache_set_query(cache_key, vec)
+        return vec
 
 
 def build_embedding_client(
