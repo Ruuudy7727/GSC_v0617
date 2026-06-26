@@ -114,7 +114,7 @@ def build_demo() -> gr.Blocks:
                 )
                 current_product = gr.Markdown("当前模式：**通用问答（全部产品）**")
             with gr.Column(scale=3):
-                chatbot = gr.Chatbot(label="对话", height=480, render_markdown=True)
+                chatbot = gr.Chatbot(label="对话", height=480, render_markdown=True, type="messages")
                 sources_box = gr.Markdown("")
                 with gr.Row():
                     msg = gr.Textbox(label="输入问题", scale=4, placeholder="例如：电池过放如何处理？")
