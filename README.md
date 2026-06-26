@@ -2,22 +2,33 @@
 
 面向科陆储能产品用户手册的轻量级 RAG（检索增强生成）问答系统。支持在 **11 份产品手册** 内进行通用问答或指定产品问答，并结合手册配图进行多模态回答。
 
+**仓库地址：** [https://github.com/Ruuudy7727/GSC_v0617](https://github.com/Ruuudy7727/GSC_v0617)
+
 ## 功能特性
 
 - **通用问答**：不选产品时，检索全部手册并整合回答
-- **指定产品问答**：按产品树下拉选择后，仅在对应手册内检索
+- **指定产品问答**：按产品系列下拉选择后，仅在对应手册内检索
 - **混合检索**：向量（Chroma）+ BM25 关键词 + BGE Cross-Encoder 重排
 - **话题感知扩展**：对「安装 / 接线 / 故障 / 维护」等意图自动扩展子查询
 - **多模态回答**：检索到的示意图通过 Gemini Vision 参与生成，并在回答中 inline 插入 Markdown 图片
 - **双入口**：Gradio Web UI（`app.py`）与 FastAPI REST API（`api_server.py`）
 
+## 覆盖产品
+
+共 **11 份手册**，分属 3 个系列（配置见 [`config/products.json`](config/products.json)）：
+
+| 系列 | 产品 |
+|------|------|
+| **Aqua-E** | Aqua-E 261-125-2h CN / Pro、522-250-2h CN / Pro、522-125-4h CN、Aqua-EM 261-125-2h CN、Aqua-ME 261-125-2h / 522-250-2h CN |
+| **Aqua-X** | Aqua-EX 261-125-100 CN、Aqua-MX 261-125-2h CN |
+| **汇流柜** | CLMG-1125 |
+
 ## 目录结构
 
 ```
 GSC_v0617/
-├── 用户手册/                    # PDF 原稿（11 份）
-├── rag_output_manuals/          # MinerU 解析产物（Markdown + 图片）
-├── rag_data/all/                # 知识库运行时数据
+├── rag_output_manuals/          # MinerU 解析产物（Markdown + 图片，已入库）
+├── rag_data/all/                # 知识库运行时数据（已预构建，clone 后可直接问答）
 │   ├── kv_store_text_chunks.json   # Step1 切分后的 chunk 文本
 │   ├── ingest_manifest.json        # 入库 manifest（增量同步用）
 │   ├── section_index.json          # 章节索引（话题扩展用）
@@ -29,7 +40,8 @@ GSC_v0617/
 │   ├── step1_build_knowledge.py # PDF/MD → chunk JSON
 │   ├── step2_json2chroma.py     # chunk JSON → Chroma 向量
 │   ├── manual_chunk_splitter.py # 语义切分
-│   └── build_section_index.py   # 章节索引构建
+│   ├── build_section_index.py   # 章节索引构建
+│   └── manifest.py              # 入库 manifest 读写
 ├── core/                        # 基础设施层
 │   ├── embedding_client.py      # 在线 / Ollama Embedding
 │   ├── local_db.py              # Chroma + BM25 混合检索
@@ -43,14 +55,14 @@ GSC_v0617/
 ├── scripts/
 │   ├── setup_server.sh          # 服务器一键准备（Reranker 等）
 │   └── trace_retrieval.py       # 检索链路调试脚本
-├── app.py                       # Gradio UI
-├── api_server.py                # FastAPI 服务
+├── app.py                       # Gradio UI（FastAPI + uvicorn 托管）
+├── api_server.py                # FastAPI REST 服务
 ├── .env.example                 # 环境变量模板
 └── docs/
     └── RAG.md                   # RAG 流水线详细文档
 ```
 
-> 仓库内 `用户手册/`、`rag_output_manuals/` 与预构建的 `rag_data/all/` 可直接使用，**clone 后通常无需重新入库即可问答**。
+> **数据说明**：仓库已包含 `rag_output_manuals/` 与预构建的 `rag_data/all/`，**clone 并配置 API Key 后通常无需重新入库即可问答**。PDF 原稿目录 `用户手册/` 不在仓库内；若需从 PDF 全量重新解析，请自行放置 PDF 后执行入库脚本。
 
 ## 环境要求
 
@@ -65,26 +77,39 @@ GSC_v0617/
 
 ## 快速开始
 
-### 1. 安装依赖
+### 1. 克隆仓库
 
 ```bash
+git clone https://github.com/Ruuudy7727/GSC_v0617.git
 cd GSC_v0617
-python -m venv .venv && source .venv/bin/activate   # Windows: .venv\Scripts\activate
+```
+
+### 2. 安装依赖
+
+```bash
+# Linux / macOS
+python -m venv .venv && source .venv/bin/activate
+
+# Windows PowerShell
+python -m venv .venv; .\.venv\Scripts\Activate.ps1
+
 pip install -r requirements.txt
 ```
 
-已有 `thinkdepth` 环境时，通常只需补装 Reranker 依赖：
+已有 `thinkdepth` 等 ML 环境时，通常只需补装 Reranker 依赖：
 
 ```bash
+# Linux / macOS
 bash scripts/setup_server.sh
-# 或
+
+# 或手动安装
 pip install -r requirements-server.txt
 ```
 
-### 2. 配置环境变量
+### 3. 配置环境变量
 
 ```bash
-cp .env.example .env
+cp .env.example .env   # Windows: copy .env.example .env
 ```
 
 编辑 `.env`，至少填入：
@@ -94,6 +119,7 @@ cp .env.example .env
 MIDEA_API_KEY=你的密钥
 MIDEA_AIGC_USER=你的用户标识
 GEMINI_MODEL=gemini-2.5-flash
+GEMINI_AIMP_BIZ_ID=gemini-2.5-flash
 
 # Embedding（生产推荐 online）
 EMBED_BACKEND=online
@@ -111,24 +137,26 @@ PUBLIC_API_TOKEN=changeme
 
 > **注意**：`.env` 不要提交到 Git。同一文件中不要重复定义 `EMBED_BACKEND` / `EMBED_MODEL`，否则后者覆盖前者。
 
-### 3. 启动服务
+### 4. 启动服务
 
-**Gradio UI（默认端口 7860，可用 `GRADIO_PORT` 覆盖）：**
+**Gradio UI**（默认端口 `7860`，可用 `GRADIO_PORT` 覆盖）：
 
 ```bash
 python app.py
 ```
 
-**FastAPI（默认端口 8000）：**
+`app.py` 通过 FastAPI + uvicorn 托管 Gradio 界面，并挂载 `/kb_images` 静态图片路由。
+
+**FastAPI**（默认端口 `8000`）：
 
 ```bash
 uvicorn api_server:app --host 0.0.0.0 --port 8000
 ```
 
-浏览器访问 Gradio：`http://<host>:7860/`  
-API 文档：`http://<host>:8000/docs`
+- Gradio 界面：`http://<host>:7860/`
+- API 文档：`http://<host>:8000/docs`
 
-### 4. 冒烟测试
+### 5. 冒烟测试
 
 ```bash
 curl "http://127.0.0.1:8000/api/v1/kb/status?token=changeme"
@@ -143,7 +171,7 @@ curl "http://127.0.0.1:8000/api/v1/kb/status?token=changeme"
 ## 生产部署
 
 ```bash
-git clone <仓库URL> GSC_v0617
+git clone https://github.com/Ruuudy7727/GSC_v0617.git
 cd GSC_v0617
 conda activate thinkdepth
 
@@ -217,6 +245,7 @@ curl -X POST http://127.0.0.1:8000/api/v1/search \
 | `MIDEA_API_KEY` | 美的 AIMP API 密钥 | — |
 | `MIDEA_AIGC_USER` | AIGC 用户标识 | — |
 | `GEMINI_MODEL` | 模型名称 | `gemini-2.5-flash` |
+| `GEMINI_AIMP_BIZ_ID` | AIMP 业务 ID | `gemini-2.5-flash` |
 | `GEMINI_VISION_ENABLED` | 是否启用多模态 | `true` |
 | `GEMINI_MAX_IMAGES` | 每次最多附带图片数 | `5` |
 
@@ -224,10 +253,10 @@ curl -X POST http://127.0.0.1:8000/api/v1/search \
 
 | 变量 | 说明 | 默认 |
 |------|------|------|
-| `EMBED_BACKEND` | `online` 或 `ollama` | `ollama`（未设置时） |
+| `EMBED_BACKEND` | `online` 或 `ollama` | `online`（`.env.example`） |
 | `EMBED_BASE_URL` | 在线 API 地址 | 美的 AIMP |
 | `EMBED_API_KEY` | Embedding API 密钥 | — |
-| `EMBED_MODEL` | 模型名 | 依 backend 而定 |
+| `EMBED_MODEL` | 模型名 | `Qwen3-Embedding-4B` |
 | `EMBED_MAX_RETRIES` | 429 限流重试次数 | `8` |
 | `EMBED_RETRY_BASE_DELAY` | 重试基础延迟（秒） | `2.0` |
 | `EMBED_QUERY_INTERVAL` | 子查询间隔（秒） | `0.35` |
@@ -240,8 +269,12 @@ curl -X POST http://127.0.0.1:8000/api/v1/search \
 | `RETRIEVAL_TOP_K` | 最终返回 chunk 数 | `4` |
 | `RETRIEVAL_MIN_SCORE` | 最低相关度阈值 | `0.15` |
 | `RETRIEVAL_TOPIC_EXTRA_MAX` | 话题扩展子查询上限 | `3` |
+| `RETRIEVAL_FETCH_K` | 混合检索初筛候选数 | `20` |
+| `RETRIEVAL_SCORE_GAP` | 分数断崖截断阈值 | `0.25` |
+| `RETRIEVAL_MIN_KEEP` | 截断后最少保留条数 | `2` |
 | `RERANK_ENABLED` | 是否启用 Cross-Encoder | `true` |
 | `RERANK_MODEL` | Reranker 模型路径或 HF id | `BAAI/bge-reranker-v2-m3` |
+| `RERANK_CANDIDATE_K` | 送入 Reranker 的候选数 | `15` |
 
 ### 向量库
 
@@ -259,7 +292,7 @@ curl -X POST http://127.0.0.1:8000/api/v1/search \
 python ingest/step1_build_knowledge.py --skip-parse --sync
 python ingest/step2_json2chroma.py --sync
 
-# 从 PDF 全量解析（需安装 MinerU）
+# 从 PDF 全量解析（需安装 MinerU，并将 PDF 放入 用户手册/）
 python ingest/step1_build_knowledge.py --input-dir ./用户手册
 python ingest/step2_json2chroma.py
 ```
@@ -283,7 +316,11 @@ EMBED_MODEL=qwen3-embedding:4b
 **检索链路调试：**
 
 ```bash
+# Linux / macOS
 TRACE_QUERY="如何安装" TRACE_PRODUCT="aqua-e-261-125-2h-cn" python scripts/trace_retrieval.py
+
+# Windows PowerShell
+$env:TRACE_QUERY="如何安装"; $env:TRACE_PRODUCT="aqua-e-261-125-2h-cn"; python scripts/trace_retrieval.py
 ```
 
 **常见问题：**
@@ -293,7 +330,7 @@ TRACE_QUERY="如何安装" TRACE_PRODUCT="aqua-e-261-125-2h-cn" python scripts/t
 | `向量检索失败: 429` | Embedding API 限流 | 调大 `EMBED_QUERY_INTERVAL`；申请提高配额；见 [docs/RAG.md#限流与降级](docs/RAG.md#限流与降级) |
 | `未找到相关信息` | 检索分数低于阈值 | 换问法；降低 `RETRIEVAL_MIN_SCORE`；检查 product_id |
 | Reranker 加载失败 | 模型未下载 | 运行 `setup_server.sh` 或设置 `RERANK_MODEL` 本机路径 |
-| 图片不显示 | 静态资源未挂载 | 确认 `/kb_images` 路由正常（app / api 均已挂载） |
+| 图片不显示 | 静态资源未挂载 | 确认 `/kb_images` 路由正常（`app.py` / `api_server.py` 均已挂载） |
 
 ## 架构概览
 
